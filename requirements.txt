@@ -1,0 +1,10 @@
+# classical path (milestone 1)
+numpy>=2.1
+scipy>=1.15
+h5py>=3.12
+pandas>=2.2
+matplotlib>=3.10
+tqdm>=4.67
+pytest>=8.0
+# deep path - added when we get there
+# torch  (install from https://download.pytorch.org/whl/cu128 for sm_120)
