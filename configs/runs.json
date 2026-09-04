@@ -1,0 +1,152 @@
+{
+  "_comment": [
+    "Every run in the project, in one versioned file. Runs are grouped by the",
+    "collection they are scored on. MAP is only comparable *within* a group: a",
+    "smaller collection has fewer wrong answers available and scores higher for",
+    "free, so the report never puts two groups in one table."
+  ],
+  "full": [
+    {
+      "name": "random_full",
+      "method": "random",
+      "seed": 0,
+      "collection": {
+        "kind": "full"
+      }
+    },
+    {
+      "name": "duration_full",
+      "method": "duration",
+      "seed": 0,
+      "collection": {
+        "kind": "full"
+      }
+    },
+    {
+      "name": "ftm2d_full",
+      "method": "ftm2d",
+      "seed": 0,
+      "collection": {
+        "kind": "full"
+      },
+      "params": {
+        "target_hz": 5.0,
+        "patch_frames": 180,
+        "patch_hop": 60,
+        "n_time_coeffs": 32,
+        "compress": "sqrt"
+      }
+    }
+  ],
+  "subsample50": [
+    {
+      "name": "random_sub50",
+      "method": "random",
+      "seed": 0,
+      "collection": {
+        "kind": "subsample",
+        "n_cliques": 50,
+        "seed": 0
+      }
+    },
+    {
+      "name": "duration_sub50",
+      "method": "duration",
+      "seed": 0,
+      "collection": {
+        "kind": "subsample",
+        "n_cliques": 50,
+        "seed": 0
+      }
+    },
+    {
+      "name": "ftm2d_sub50",
+      "method": "ftm2d",
+      "seed": 0,
+      "collection": {
+        "kind": "subsample",
+        "n_cliques": 50,
+        "seed": 0
+      },
+      "params": {
+        "target_hz": 5.0,
+        "patch_frames": 180,
+        "patch_hop": 60,
+        "n_time_coeffs": 32,
+        "compress": "sqrt"
+      }
+    },
+    {
+      "name": "qmax_sub50",
+      "method": "qmax",
+      "seed": 0,
+      "collection": {
+        "kind": "subsample",
+        "n_cliques": 50,
+        "seed": 0
+      },
+      "params": {
+        "target_hz": 2.0,
+        "m": 9,
+        "tau": 1,
+        "kappa": 0.095,
+        "gap_open": 0.5,
+        "gap_extend": 0.5,
+        "symmetrize": true,
+        "n_jobs": 12
+      }
+    }
+  ],
+  "test": [
+    {
+      "name": "random_test",
+      "method": "random",
+      "seed": 0,
+      "collection": {
+        "kind": "split",
+        "split": "test",
+        "seed": 0
+      }
+    },
+    {
+      "name": "duration_test",
+      "method": "duration",
+      "seed": 0,
+      "collection": {
+        "kind": "split",
+        "split": "test",
+        "seed": 0
+      }
+    },
+    {
+      "name": "ftm2d_test",
+      "method": "ftm2d",
+      "seed": 0,
+      "collection": {
+        "kind": "split",
+        "split": "test",
+        "seed": 0
+      },
+      "params": {
+        "target_hz": 5.0,
+        "patch_frames": 180,
+        "patch_hop": 60,
+        "n_time_coeffs": 32,
+        "compress": "sqrt"
+      }
+    },
+    {
+      "name": "learned_test",
+      "method": "learned",
+      "seed": 0,
+      "collection": {
+        "kind": "split",
+        "split": "test",
+        "seed": 0
+      },
+      "params": {
+        "checkpoint": "results/cnn.pt"
+      }
+    }
+  ]
+}

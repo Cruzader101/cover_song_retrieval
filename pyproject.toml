@@ -7,9 +7,28 @@ name = "csr"
 version = "0.1.0"
 description = "Cover song retrieval, from classical MIR to learned embeddings"
 requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.1",
+    "scipy>=1.15",
+    "h5py>=3.12",
+    "pandas>=2.2",
+    "matplotlib>=3.10",
+    "tqdm>=4.67",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+# torch is installed from the CUDA 12.8 index for sm_120, not from PyPI:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+deep = ["torch>=2.7"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: takes more than a few seconds (deselect with -m 'not slow')",
+    "needs_data: requires the real Da-TACOS download under data/raw",
+    "needs_torch: requires torch to be installed",
+]

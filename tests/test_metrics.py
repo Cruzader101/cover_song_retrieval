@@ -146,7 +146,12 @@ def test_shape_mismatches_raise():
 def test_random_distances_beat_nothing():
     """Sanity floor: random ranking of 100 items in 10 cliques of 10.
 
-    Expected MAP for a random ranking is ~ (R-1)/(N-1) with R=10, N=100, i.e. ~0.09.
+    R/M is only the asymptotic value of E[AP]; for small R it understates it badly,
+    because the first hit arrives early enough to lift precision at every later
+    hit. Simulated over 200k permutations with R=9 relevant among M=99 ranked
+    items, E[AP] = 0.1295, and across 200 seeds this construction gives
+    mean 0.1303, std 0.0072. P@k is a fixed cutoff and is unbiased at R/M = 0.0909.
+
     Anything a real method produces must clear this comfortably.
     """
     rng = np.random.default_rng(0)
@@ -156,5 +161,5 @@ def test_random_distances_beat_nothing():
     d = (d + d.T) / 2
     np.fill_diagonal(d, 0.0)
     r = evaluate(d, cliques=cliques)
-    assert r.mean_average_precision == pytest.approx(0.09, abs=0.03)
+    assert r.mean_average_precision == pytest.approx(0.1303, abs=0.03)
     assert r.precision_at_10 == pytest.approx(0.09, abs=0.05)
