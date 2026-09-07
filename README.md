@@ -1,100 +1,45 @@
-# cover_song_retrieval
+# Finding the same songs from a cover of a song.
+It's actually kind of difficult for a model to realize one song is a cover of the same underlying song. So this project tries to rank performances of different songs so that an actual cover of a song ranks at the top over other performances.
 
-Cover song identification built up from classical MIR to learned embeddings,
-measured the same way at every step.
+This is somewhat hard because a cover of a song can differ in key, tempo, and instruments. 
 
-Given one performance, rank every other performance in the collection by how
-likely it is to be the same underlying work. Covers change key, tempo,
-instrumentation, structure and length, so almost nothing survives from the raw
-audio -- what survives is the sequence of harmonies, which is what every method
-here is built around.
+# How do you rank the cover of a song?
+So you want to find what doesn't change in between covers which is the harmonic progression.
 
-## Setup
+However comparing he harmonic progressions of songs brings in the same problems of tempo and key:
+- keys change the actual chords being played
+- tempo changes in what timeframe the chords are played.
 
-```bash
-python -m venv .venv
-.venv/Scripts/python.exe -m pip install -e ".[dev]"
-.venv/Scripts/python.exe -m pytest
-```
+A lot of this project is just finding ways to compare chord sequences while ignoring changes to those chord sequences.
 
-Nothing above needs the dataset. To check the whole pipeline without downloading
-15 GB, run it on generated data:
+# What methods are used to achieve this?
+I used four different methods:
+- just look at duration
+- squish the entire song into one matrix, and then find the 2d fourier transform of it, and then find the magnitude. 
+- use the q-max algorithm to align the two song's chord sequences
+- learning invariances through a convulution network
 
-```bash
-.venv/Scripts/python.exe scripts/reproduce.py --synthetic
-```
+# Evaluation Metrics
+I used four evaluation metrics for each method:
+- average precision measure the precision-at-rank of every position where a correct song was identified. so correct songs in earlier positions have a higher rank than correct songs in later positions. then the MAP (mean average precision) is the average of all the average precisions for each song.
+- MR1 (mean rank of first correct hit) measures on average how far down the ranked list a model ranked the first correct hit.
+- P@10 (precision at 10) measures out of the first ten rankings, how many are actually correct.
 
-## Data
+# Data Used
+I did not collect all this data, I used the DA-TACOS dataset. Specifically the "Benchmark subset" which includes 15,000-performances. 
 
-[Da-TACOS](https://github.com/MTG/da-tacos) benchmark subset, pre-extracted
-features only -- no audio. The shape of it matters for how anything is scored:
+This data set includes 1,000 "cliques" which are groups of 13 cover perfoamcnes of the same song. The remaining 2,000 items are cliques with only one performance used as distractors.
 
-- **3000 cliques, 15000 performances.** 1000 cliques hold exactly 13 covers each;
-  the other 2000 are singletons that exist only as distractors.
-- So the collection has 15000 items but only **13000 valid queries**. A singleton
-  has no relevant item to find, and `evaluate` raises on it rather than scoring it
-  zero, because that would be a dataset bug quietly averaged into the result.
-- HPCP chroma is `(n_frames, 12)` at ~21.5 frames/s. Files are HDF5 written by
-  `deepdish`, so arrays are datasets but scalars live in attributes.
+For each performance, there is a file containing the chroma for every fraction of a second of a song.
 
-Fetch it (about 9.6 GB for HPCP plus 3 MB of metadata) into `data/raw/`, which is
-gitignored:
+There is a master list that is basically a dictionary for the label of each performance and the file containing the chroma.
 
-```bash
-curl -L -C - -o data/raw/_archives/da-tacos_metadata.zip \
-  "https://zenodo.org/records/3520368/files/da-tacos_metadata.zip?download=1"
-curl -L -C - -o data/raw/_archives/da-tacos_benchmark_subset_hpcp.zip \
-  "https://zenodo.org/records/3520368/files/da-tacos_benchmark_subset_hpcp.zip?download=1"
-```
+# Results
 
-Unzip both into `data/raw/`, then:
 
-```bash
-.venv/Scripts/python.exe scripts/reproduce.py          # fast methods
-.venv/Scripts/python.exe scripts/reproduce.py --slow   # adds Qmax
-```
 
-## Methods
 
-| | idea | cost |
-|---|---|---|
-| `random` | shuffled ranking, the floor everything must clear | free |
-| `duration` | rank by similarity of length alone, no audio content | free |
-| `ftm2d` | 2D Fourier magnitude of chroma patches: `\|FFT2\|` is unchanged by a circular shift of either axis, so key and start offset fall out for free. One vector per song, so the whole collection is a matrix product | minutes |
-| `qmax` | cross-recurrence plot plus a local-alignment DP over chroma. Keeps time, finds the longest shared harmonic path. Far more accurate and quadratic in both collection size and song length | hours |
-| `learned` | a small CNN whose convolutions wrap around the pitch axis, so key invariance is built into the architecture rather than trained. Classification over training cliques with a cosine-softmax head; the embedding is the layer before the classifier | GPU minutes |
 
-## Reading the numbers
-
-MAP is only comparable **within one collection**. A method scored on 650 items has
-far fewer ways to be wrong than one scored on 15000, so it scores higher for free.
-`scripts/report.py` groups by collection and refuses to merge them. Three groups
-are used:
-
-- **full** -- all 15000 items. Only methods with no fitted parameters, so leakage
-  is impossible by construction.
-- **subsample50** -- 50 whole cliques, no distractors. Qmax cannot run on the full
-  collection, so the cheap methods are re-run here to give it a fair comparison.
-- **test** -- the held-out 200 cliques, for anything trained on the other 800.
-
-Splits are always by clique, never by performance: putting two covers of one work
-on opposite sides of a split is the leakage failure mode for this task.
-
-## Results
-
-Not checked in, since a number belongs to the run that produced it rather than to
-the repository. `scripts/reproduce.py` writes one `results/<run-name>.json` per run
--- metrics alongside the config, seed and commit behind them -- and collects them
-into `results/summary.md`.
-
-## Status
-
-- [x] Evaluation harness: MAP / MR1 / P@10 with known-answer tests (`src/csr/eval/metrics.py`)
-- [x] Da-TACOS benchmark subset loader (pre-extracted features)
-- [x] Dumb baselines (random, duration)
-- [x] 2D Fourier magnitude on HPCP
-- [x] Qmax / cross-recurrence alignment
-- [x] Learned embeddings
 
 ## Layout
 
