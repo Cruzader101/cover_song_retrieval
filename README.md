@@ -40,6 +40,13 @@ There is a master list that is basically a dictionary for the label of each perf
 
 
 
+# Dependencies Needed
+- Numpy, scipy for all the array math, fast fourier transform, signal processing
+- h5py reads Da-TACOS performance files in .h5 format
+- pandas for joining data
+- pytest for testing
+  
+
 
 ## Layout
 
