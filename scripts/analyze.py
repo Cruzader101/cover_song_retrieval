@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from csr.analysis import factors, regress, stats  # noqa: E402
 from csr.data import cache, metadata  # noqa: E402
+from csr.data.datacos import query_mask  # noqa: E402
 from csr.eval.batch import evaluate_chunked, evaluate_chunked_pairs  # noqa: E402
 from csr.methods import build  # noqa: E402
 from csr.run import DISTANCE_DIR, manifest, select_collection  # noqa: E402
@@ -43,6 +44,11 @@ CHROMA_CACHE = "data/interim/chroma_native"
 #: before calling an invariant method's null a real null. Pre-registered here rather
 #: than chosen once the coefficients are on screen.
 EQUIVALENCE_FRACTION = 0.25
+
+#: Fewest cliques a factor has to vary across before its coefficient is reported.
+#: Below this the clustered standard error is being asked for more than a handful
+#: of independent observations can give.
+MIN_FACTOR_CLIQUES = 5
 
 
 def distances_for(name: str, config: dict, collection, chroma):
@@ -96,7 +102,8 @@ def pairs_for(name: str, config: dict, collection, chroma) -> np.ndarray:
 
 
 def queries_of(collection) -> np.ndarray:
-    return np.flatnonzero(collection["clique_id"].duplicated(keep=False).to_numpy())
+    """Positional rows that may be queries -- the same rule `run.run` scores by."""
+    return np.flatnonzero(query_mask(collection))
 
 
 def transposition_test(name, config, collection, chroma, seed) -> float:
@@ -140,11 +147,20 @@ def analyse_one(name, config, collection, meta, profiles, chroma, n_boot, seed):
     X, names = factors.design_matrix(model_frame)
     queries = model_frame["query_id"].to_numpy()
 
-    # A factor with no variation inside any query cannot be estimated against a
-    # query fixed effect. On the 50-clique subsample same_artist is one: no query
-    # there has two covers by the same performer. Dropping it is right, but it is
-    # reported rather than silently absorbed.
+    # Two ways a factor can be unestimable here, both reported rather than
+    # silently absorbed. It can have no variation inside any query, which is what
+    # a query fixed effect needs. Or it can vary in too few cliques to support a
+    # standard error clustered on them: `same_artist` is true for 2 of 30,648
+    # pairs on the test split, all inside one clique, and the random control duly
+    # reported that as a significant effect on a ranking made of noise.
+    cliques = model_frame["clique_id"].to_numpy()
+    codes = np.unique(cliques, return_inverse=True)[1]
     keep = regress.within_variation(X, queries) > 1e-10
+    for column in np.flatnonzero(keep):
+        touched = np.unique(codes[X[:, column] != 0]).size
+        if touched < MIN_FACTOR_CLIQUES:
+            keep[column] = False
+
     unestimable = [n for n, k in zip(names, keep) if not k]
     X, names = X[:, keep], tuple(n for n, k in zip(names, keep) if k)
 
@@ -181,7 +197,7 @@ def analyse_one(name, config, collection, meta, profiles, chroma, n_boot, seed):
         "method": config["method"],
         "n_pairs": int(len(frame)),
         "n_pairs_dropped_no_year": dropped,
-        "factors_without_within_variation": unestimable,
+        "factors_not_estimable": unestimable,
         "key_label_agrees_with_chroma": agreement,
         "coefficients": {
             n: {
@@ -241,6 +257,14 @@ def main() -> int:
     chroma = cache.load(CHROMA_CACHE)
     meta_all, profiles_all = metadata.cached(frame, chroma)
 
+    earlier = ANALYSIS / f"{args.collection}.json"
+    previous = (
+        json.loads(earlier.read_text(encoding="utf-8"))["methods"]
+        if earlier.is_file()
+        else {}
+    )
+    previous = {k: v for k, v in previous.items() if "map_rekeyed" in v}
+
     entries = {}
     for name in names:
         started = time.perf_counter()
@@ -257,6 +281,11 @@ def main() -> int:
             entries[name]["map_rekeyed"] = transposition_test(
                 name, runs[name], collection, chroma, args.seed
             )
+        elif name in previous and previous[name]["map"] == entries[name]["map"]:
+            # Skipped as too expensive, but measured on an earlier run of the same
+            # matrix. Qmax takes two and a half hours to re-key; losing that to a
+            # re-run over some other method's numbers would be daft.
+            entries[name]["map_rekeyed"] = previous[name]["map_rekeyed"]
         entries[name]["seconds"] = round(time.perf_counter() - started, 1)
         print(f"  {name}: {entries[name]['n_pairs']:,} pairs "
               f"({entries[name]['seconds']}s)")

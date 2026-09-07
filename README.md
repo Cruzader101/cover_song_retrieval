@@ -62,7 +62,7 @@ trained network is allowed to be scored on.
 
 | method | MAP | MR1 | P@10 | ties | time |
 |---|---:|---:|---:|---:|---:|
-| learned CNN | 0.2926 | 27.1 | 0.3263 | 0.12% | 80 s |
+| learned CNN | 0.2882 | 25.6 | 0.3172 | 0.17% | 68 s |
 | 2D-FTM, no DC | 0.0901 | 83.0 | 0.1095 | 0.17% | 2 min |
 | 2D-FTM | 0.0593 | 97.3 | 0.0773 | 0.16% | 19 s |
 | duration | 0.0070 | 317.4 | 0.0046 | 22.96% | 3 s |
@@ -171,10 +171,18 @@ these metrics are decided at.
 ## The network
 
 It wins by a wide margin on the only collection it is allowed to be scored on:
-**0.2926** against 0.0901 for the best classical method on the same 4,600 items. It
+**0.2882** against 0.0901 for the best classical method on the same 4,600 items. It
 trains on 700 cliques, validates on 100 and tests on 200, split by clique so no song
 ever appears on both sides, and the saved checkpoint is the epoch with the best
 validation MAP rather than the last one.
+
+That number was 0.2926 until the factor analysis below turned up a bug in how the
+embeddings were computed — batching padded the short performances and the pooling
+averaged over the padding, so a performance embedded differently depending on which
+other tracks shared its batch. Fixing it *lowered* MAP slightly and improved MR1
+from 27.1 to 25.6, because the padding had been leaking a length cue into the
+embedding, and covers of one work do tend to run to similar lengths. The number
+below is smaller and means what it says.
 
 
 # What breaks retrieval
@@ -221,7 +229,7 @@ detect anything at all.
 | chroma mean | +1.0692 | 52.8% | 0.0959 |
 | 2D-FTM, no DC | +0.1345 | 0.0% | 0.2263 |
 | chroma mean, best key | +0.1284 | 0.0% | 0.1129 |
-| Q-max | +0.1275 | PENDING | 0.5585 |
+| Q-max | +0.1275 | 0.0% | 0.5585 |
 | 2D-FTM | +0.1031 | 0.0% | 0.1781 |
 | duration | +0.0058 | 0.0% | 0.0489 |
 | random | −0.0057 | 0.0% | 0.0294 |
@@ -235,10 +243,15 @@ identical ranking.
 
 The two columns disagree, and the disagreement is the finding.
 
-2D-FTM loses **0.0%** when the keys are scrambled. Its invariance is exact, and the
-sensitive control losing half its MAP on the same test proves the measurement can
-see a key effect when one exists. Yet covers that *happen* to be in another key
-still rank about 30% further down for it.
+2D-FTM does not lose 0.0% in the sense of rounding to it. Its MAP after re-keying is
+**bit-identical** — a delta of exactly `0.00e+00` — and so is Q-max's to within
+`1.9e-06`, which is its per-pair transposition search occasionally breaking a tie
+the other way. The invariance is not approximately real, it is arithmetic. And the
+sensitive control losing half its MAP on the very same test proves the measurement
+can see a key effect when there is one.
+
+Yet covers that *happen* to be in another key still rank about 35% further down for
+both — 10^0.1345.
 
 Both things are true because a key change does not cost these methods anything — it
 marks a cover that was reinterpreted more freely in every other way too, including
@@ -299,7 +312,47 @@ That fits: it is the method that insists on matching an actual sequence of harmo
 so rewriting them hurts it more than it hurts a method comparing bulk texture.
 
 `random` is flat everywhere, which is the null control this table needs to be worth
-reading at all.
+reading at all. It earned its keep twice. `same_artist` — whether both recordings
+are by the same performer — showed up as a *significant* predictor of a ranking made
+of pure noise, which is impossible. It is true for **2 of 30,648 pairs** on the test
+split, all inside one clique, and a standard error clustered on cliques cannot be
+asked for more than one clique's worth of evidence. Factors that vary across fewer
+than five cliques are now dropped and listed rather than reported.
+
+## The network, and the bug this analysis found
+
+The learned CNN is the only method scored on the held-out split, so it gets its own
+run of the same machinery. Two things came out of it.
+
+**It is the only method whose key effect is null observationally as well as
+interventionally.** All six of its key-shift coefficients have intervals covering
+zero (p between 0.07 and 0.51), where 2D-FTM's are firmly positive. It is also by
+far the most accurate method on that split. Both fit the same explanation: the
+observational key effect is really a proxy for *how badly a method handles a freely
+reinterpreted cover*, and the network handles those best, so the proxy has least to
+bite on.
+
+**Its length coefficient was an artifact, and finding that fixed a real bug.** The
+first run gave the CNN a `duration_ratio` coefficient of **+0.278** — nothing like
+the ~0.01 of every other real method, and second only to the `duration` baseline
+itself. A method whose embedding is supposed to describe harmony should not care
+that much about length.
+
+It didn't. `embed` pads a batch to its longest member and the network mean-pools over
+time, padding included, so an embedding depended on which other tracks shared its
+batch. The same performance embedded alone and beside a longer one had a cosine
+similarity of **0.68** with itself. Zeros are not neutral: batch norm shifts them,
+the ReLU keeps what survives, and it leaks back through the convolutions into the
+last real column.
+
+Masking both pools and grouping batches by padded width fixed it — same performance,
+any batch, now agrees to 3e-05, which is float32 kernel choice rather than structure.
+The coefficient fell from **+0.278 to +0.083**, and `year_gap` fell with it, since
+length had been standing in for era. `test_models.py` now asserts the property.
+
+This is the argument for the whole milestone in one example. The bug was invisible to
+MAP — it *raised* MAP, by smuggling in a length cue that correlates with the right
+answer — and only showed up as a coefficient that made no sense for the architecture.
 
 ## What Da-TACOS cannot answer
 

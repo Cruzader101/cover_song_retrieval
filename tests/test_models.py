@@ -63,6 +63,46 @@ def test_embed_pads_a_mixed_length_batch(corpus):
     assert np.isfinite(vectors).all()
 
 
+def test_an_embedding_does_not_depend_on_who_shares_its_batch(corpus):
+    """A performance must embed the same way alone and beside a longer one.
+
+    It did not. Batching pads the short members, and zeros stop being neutral the
+    moment batch norm shifts them -- the ReLU keeps what survives and the result
+    leaks back through the convolutions into the last real column. The same
+    performance came out at a cosine of 0.68 with itself, and the factor analysis
+    read that as the network being unusually sensitive to a change in length.
+
+    On CPU this is exact. The tolerance is for float32 kernel choice, not for the
+    effect this test exists to catch, which was four orders of magnitude larger.
+    """
+    _, chroma = corpus
+    model = ChromaCNN(dim=32, width=8).eval()
+    ids = ["P_0_0", "P_0_1", "P_1_0", "P_1_1"]
+    lengths = [400, 1200, 780, 2000]
+    clipped = {p: chroma[p][:n] for p, n in zip(ids, lengths)}
+
+    one_at_a_time = embed(model, ids, clipped, device="cpu", batch=1)
+    together = embed(model, ids, clipped, device="cpu", batch=4)
+    assert np.abs(one_at_a_time - together).max() < 1e-5
+
+    # And embedding a subset must not move the vectors that survive into it.
+    subset = embed(model, ids[:2], clipped, device="cpu", batch=4)
+    assert np.abs(subset - one_at_a_time[:2]).max() < 1e-5
+
+
+def test_embed_returns_vectors_in_the_order_it_was_asked_for(corpus):
+    """Bucketing by width reorders the work; it must not reorder the answer."""
+    _, chroma = corpus
+    model = ChromaCNN(dim=32, width=8).eval()
+    ids = ["P_0_0", "P_0_1", "P_1_0", "P_1_1"]
+    clipped = {p: chroma[p][:n] for p, n in zip(ids, [400, 1200, 780, 2000])}
+
+    everything = embed(model, ids, clipped, device="cpu", batch=2)
+    for position, pid in enumerate(ids):
+        alone = embed(model, [pid], clipped, device="cpu", batch=1)[0]
+        assert np.abs(everything[position] - alone).max() < 1e-5
+
+
 def test_model_can_overfit_a_tiny_batch():
     """Catches a broken training loop in seconds: 8 samples, 2 classes."""
     torch.manual_seed(0)
