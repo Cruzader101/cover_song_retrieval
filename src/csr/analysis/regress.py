@@ -92,6 +92,19 @@ def demean(values: np.ndarray, codes: np.ndarray, n_groups: int) -> np.ndarray:
     return out
 
 
+def within_variation(X, groups) -> np.ndarray:
+    """Spread of each column once the group means are gone. -> `(n_factors,)`.
+
+    A factor with none of it cannot be estimated here: everything it says is already
+    said by which group the row is in. On a small collection that is usually a fact
+    about the data rather than a mistake -- no query having two covers by the same
+    artist, say -- so callers drop the column and report which one, instead of
+    quietly fitting a model that cannot see it.
+    """
+    codes, n_groups = _codes(groups)
+    return demean(np.asarray(X, dtype=np.float64), codes, n_groups).std(axis=0)
+
+
 def within_ols(
     y,
     X,
@@ -131,12 +144,19 @@ def within_ols(
     x_within = demean(X, group_codes, n_groups)
 
     n_obs, n_factors = x_within.shape
-    if np.linalg.matrix_rank(x_within) < n_factors:
+    rank = int(np.linalg.matrix_rank(x_within))
+    if rank < n_factors:
+        flat = [names[j] for j in np.flatnonzero(x_within.std(axis=0) <= 1e-12)]
+        detail = (
+            f"no within-group variation in {', '.join(flat)}"
+            if flat
+            else "the columns are collinear once the group means are removed"
+        )
         raise ValueError(
             f"the within-group design is rank deficient ({n_factors} columns, rank "
-            f"{np.linalg.matrix_rank(x_within)}). A factor that never varies inside "
-            "a group carries no within information, and a full set of dummies needs "
-            "a reference level dropped."
+            f"{rank}): {detail}. A factor that never varies inside a group carries "
+            "no within information, and a full set of dummies needs a reference "
+            "level dropped."
         )
 
     xtx = x_within.T @ x_within
