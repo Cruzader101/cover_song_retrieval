@@ -1,10 +1,10 @@
 # Finding the same songs from a cover of a song.
-It's actually kind of difficult for a model to realize one song is a cover of the same underlying song. So this project tries to rank performances of different songs so that an actual cover of a song ranks at the top over other performances.
+This project tries to rank performances of different songs so that an actual cover of a song ranks at the top over other performances.
 
 This is somewhat hard because a cover of a song can differ in key, tempo, and instruments. 
 
 # How do you rank the cover of a song?
-So you want to find what doesn't change in between covers which is the harmonic progression.
+What doesn't change in between covers is the harmonic progression.
 
 However comparing he harmonic progressions of songs brings in the same problems of tempo and key:
 - keys change the actual chords being played
