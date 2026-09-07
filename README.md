@@ -375,6 +375,34 @@ its dominant periodicity is a pulse. That measures harmonic rhythm rather than t
 beat, which is fine for the only use it gets — a *ratio* between two performances of
 one work, who are playing the same chord sequence.
 
+## Does it replicate?
+
+Everything above is the 50-clique subsample, chosen because it holds Q-max and has
+the highest MAPs, so a null there is least likely to be a power failure. The same
+analysis over the **full 15,000 performances — 156,000 pairs in 1,000 cliques** —
+gives the same answers with twenty times the cliques:
+
+| method | key | tempo | length | major↔minor | no singer |
+|---|---:|---:|---:|---:|---:|
+| chroma mean | **+1.183** | +0.007\* | +0.007\* | −0.001 | +0.071\* |
+| chroma mean, best key | +0.093 | +0.025\* | +0.015\* | +0.240\* | +0.131\* |
+| 2D-FTM | +0.069 | +0.078\* | +0.008 | +0.073\* | +0.282\* |
+| 2D-FTM, no DC | +0.106 | +0.119\* | +0.019\* | +0.104\* | +0.083\* |
+| duration | +0.009 | +0.003\* | **+0.404\*** | +0.006 | −0.012\* |
+| random | −0.001 | −0.002 | −0.001 | +0.001 | −0.001 |
+
+The tempo ordering survives exactly — flat for a descriptor with no time axis, worst
+for the fixed-patch method, in between for the one that warps. `duration` lands at
++0.404 against +0.407 on the subsample and +0.405 on the test split, which is a
+reassuring amount of agreement for three different collections. And `random` is null
+on all five factors at the largest sample size available, which is the strongest form
+of the only control that can say this machinery is not manufacturing effects.
+
+One thing 1,000 cliques changes is worth naming: at this size almost anything is
+statistically significant. `chroma mean`'s tempo coefficient is starred at +0.007,
+and it is still nothing — a descriptor with no time axis has no mechanism for a tempo
+effect, and 0.007 in log₁₀(rank) is under 2% of a rank. Read the sizes, not the stars.
+
 ## How much to trust the intervals
 
 Standard errors are clustered on the **clique**, not the query. Thirteen

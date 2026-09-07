@@ -82,8 +82,12 @@ def pairs_for(name: str, config: dict, collection, chroma) -> np.ndarray:
 
     queries = queries_of(collection)
     distances = distances_for(name, config, collection, chroma)
+    # Slice out the query rows and drop the square matrix before scoring. On the
+    # full collection that is 900 MB released before the part that allocates most.
+    rows = distances[queries]
+    del distances
     results, pairs = evaluate_chunked_pairs(
-        distances[queries], collection["clique_id"].to_list(), queries
+        rows, collection["clique_id"].to_list(), queries, chunk_size=1024
     )
 
     reported = json.loads((RESULTS / f"{name}.json").read_text())["metrics"]
@@ -263,9 +267,12 @@ def main() -> int:
         if earlier.is_file()
         else {}
     )
-    previous = {k: v for k, v in previous.items() if "map_rekeyed" in v}
 
-    entries = {}
+    # Start from what is already there so `--methods` can be run one at a time.
+    # The full collection needs about 2 GB per method and will not survive doing
+    # six of them in one process; this makes that a scheduling choice rather than
+    # a reason to lose the other five.
+    entries = dict(previous)
     for name in names:
         started = time.perf_counter()
         collection = select_collection(frame, runs[name]["collection"])
@@ -281,7 +288,10 @@ def main() -> int:
             entries[name]["map_rekeyed"] = transposition_test(
                 name, runs[name], collection, chroma, args.seed
             )
-        elif name in previous and previous[name]["map"] == entries[name]["map"]:
+        elif (
+            "map_rekeyed" in previous.get(name, {})
+            and previous[name]["map"] == entries[name]["map"]
+        ):
             # Skipped as too expensive, but measured on an earlier run of the same
             # matrix. Qmax takes two and a half hours to re-key; losing that to a
             # re-run over some other method's numbers would be daft.
