@@ -62,7 +62,7 @@ trained network is allowed to be scored on.
 
 | method | MAP | MR1 | P@10 | ties | time |
 |---|---:|---:|---:|---:|---:|
-| learned CNN | 0.2926 | 27.1 | 0.3263 | 0.12% | 80 s |
+| learned CNN | 0.2882 | 25.6 | 0.3172 | 0.17% | 68 s |
 | 2D-FTM, no DC | 0.0901 | 83.0 | 0.1095 | 0.17% | 2 min |
 | 2D-FTM | 0.0593 | 97.3 | 0.0773 | 0.16% | 19 s |
 | duration | 0.0070 | 317.4 | 0.0046 | 22.96% | 3 s |
@@ -171,11 +171,257 @@ these metrics are decided at.
 ## The network
 
 It wins by a wide margin on the only collection it is allowed to be scored on:
-**0.2926** against 0.0901 for the best classical method on the same 4,600 items. It
+**0.2882** against 0.0901 for the best classical method on the same 4,600 items. It
 trains on 700 cliques, validates on 100 and tests on 200, split by clique so no song
 ever appears on both sides, and the saved checkpoint is the epoch with the best
 validation MAP rather than the last one.
 
+That number was 0.2926 until the factor analysis below turned up a bug in how the
+embeddings were computed — batching padded the short performances and the pooling
+averaged over the padding, so a performance embedded differently depending on which
+other tracks shared its batch. Fixing it *lowered* MAP slightly and improved MR1
+from 27.1 to 25.6, because the padding had been leaking a length cue into the
+embedding, and covers of one work do tend to run to similar lengths. The number
+below is smaller and means what it says.
+
+
+# What breaks retrieval
+
+Everything above asks whether a method beats the floor. This asks **why it fails on
+the covers it fails on** — and whether the invariances every method here claims by
+construction survive contact with real covers.
+
+Every method above is built to ignore a key change. 2D-FTM gets that from the FFT
+magnitude, Q-max by transposing to the OTI first, and the network from convolutions
+that wrap around the pitch axis. Those are claims about the code. Until now the only
+evidence for any of them was a test that rolls a synthetic array.
+
+So: take each query and each of its true covers, and make one row out of where that
+cover landed and what differs between the two performances. On the 50-clique
+subsample that is 7,800 rows.
+
+Two things make the answer worth reading rather than merely computed.
+
+**A fixed effect per query.** A query with a muddy chroma ranks all twelve of its
+covers badly whatever key they are in, and pooling rows across queries would hand
+that difficulty to whichever factor happened to correlate with it. Each query's own
+mean is subtracted first, so a coefficient is identified only by comparing one
+query's covers against each other: *of these twelve, did the ones further from the
+original key land further down?* Everything about the query itself is gone before
+the first coefficient is estimated, whether or not I thought to measure it.
+
+**Two controls that differ in one property.** `chroma_mean` and `chroma_mean_oti`
+are the same descriptor — the average pitch-class profile of a whole performance —
+compared where it lies and compared at its best of twelve rotations. One is key
+invariant and the other is not, and they are identical otherwise. Without them,
+"key shift does not predict rank" is indistinguishable from an analysis too weak to
+detect anything at all.
+
+## The key invariance is real. Transposed covers still rank worse.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/key-invariance-dark.png">
+  <img alt="Observed cost of a key change beside the cost measured by re-keying every performance" src="docs/figures/key-invariance-light.png">
+</picture>
+
+| method | observed key effect | MAP lost when re-keyed | MAP |
+|---|---:|---:|---:|
+| chroma mean | +1.0692 | 52.8% | 0.0959 |
+| 2D-FTM, no DC | +0.1345 | 0.0% | 0.2263 |
+| chroma mean, best key | +0.1284 | 0.0% | 0.1129 |
+| Q-max | +0.1275 | 0.0% | 0.5585 |
+| 2D-FTM | +0.1031 | 0.0% | 0.1781 |
+| duration | +0.0058 | 0.0% | 0.0489 |
+| random | −0.0057 | 0.0% | 0.0294 |
+
+The first column is the cost in log₁₀(rank) of a cover being in another key,
+averaged over the six shift sizes, from the covers that happen to be transposed.
+The second re-keys **every performance by its own random amount** and re-runs the
+whole thing. That changes each recording's key and nothing else — same arrangement,
+same tempo, same length — so a method whose invariance is real must return an
+identical ranking.
+
+The two columns disagree, and the disagreement is the finding.
+
+2D-FTM does not lose 0.0% in the sense of rounding to it. Its MAP after re-keying is
+**bit-identical** — a delta of exactly `0.00e+00` — and so is Q-max's to within
+`1.9e-06`, which is its per-pair transposition search occasionally breaking a tie
+the other way. The invariance is not approximately real, it is arithmetic. And the
+sensitive control losing half its MAP on the very same test proves the measurement
+can see a key effect when there is one.
+
+Yet covers that *happen* to be in another key still rank about 35% further down for
+both — 10^0.1345.
+
+Both things are true because a key change does not cost these methods anything — it
+marks a cover that was reinterpreted more freely in every other way too, including
+ways nobody measured. A singer who moves a song into their own range is usually
+rebuilding the arrangement while they are at it. No regression can control for a
+variable that was never recorded, which is why the intervention is here: it is the
+only column that answers a causal question.
+
+Reporting only the regression would have said 2D-FTM is not really key invariant.
+That is false, and the figure on the right is why.
+
+I chased the confound the other way first. Restricting to pairs whose Essentia key
+label agrees with the transposition measured from the chroma makes the effect
+**larger**, not smaller — 0.1345 to 0.2156 for 2D-FTM — which is what attenuation
+from a noisy regressor looks like in reverse. The observational effect is real. It
+is just not caused by the key. Worth knowing while reading that column: the key
+label and the chroma agree on only **55%** of pairs, and Essentia puts 20% of the
+collection in C.
+
+## Everything else that predicts a bad rank
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/effect-sizes-dark.png">
+  <img alt="Coefficient and 95% interval for each factor, per method" src="docs/figures/effect-sizes-light.png">
+</picture>
+
+Cost in log₁₀(rank); `*` marks an interval excluding zero. Tempo, length and years
+are per standard deviation, the other two are the whole switch.
+
+| method | tempo | length | years apart | major↔minor | one has no singer |
+|---|---:|---:|---:|---:|---:|
+| chroma mean | −0.006 | −0.001 | −0.009 | −0.046 | +0.109\* |
+| chroma mean, best key | +0.008 | −0.003 | +0.018 | +0.181\* | +0.163\* |
+| 2D-FTM | +0.047\* | +0.010 | +0.039\* | +0.085 | +0.272\* |
+| 2D-FTM, no DC | +0.091\* | +0.015 | +0.048\* | +0.112\* | +0.105\* |
+| Q-max | +0.057\* | −0.005 | +0.032 | +0.197\* | +0.175\* |
+| duration | +0.004 | **+0.407\*** | −0.003 | +0.016 | +0.005 |
+| random | +0.002 | −0.017 | −0.006 | −0.006 | −0.011 |
+
+Every row of that table says something the method's design predicts, which is the
+main reason to believe the rest of it.
+
+**Tempo behaves exactly as each method's construction says it should.** The two
+`chroma mean` rows are flat, because an average pitch-class profile has no time axis
+at all and there is nothing for a tempo change to disturb. 2D-FTM has the largest
+penalty of any real method, because its patch is a fixed 180 frames and a faster
+performance simply does not line up with it. Q-max sits between them, because its
+alignment warps locally and absorbs some of the stretch. This is the one place where
+a genuine weakness shows up, and it shows up where the code says it would.
+
+**Only the `duration` method cares about length**, at +0.407 — the largest single
+number in the table, from the one method that ranks by nothing else. Every real
+method is flat there. So arrangement length is not what hurts them; the local time
+scale is, and the two factors are doing separate jobs.
+
+**Changing the mode or dropping the vocal costs real money**, and costs Q-max most.
+That fits: it is the method that insists on matching an actual sequence of harmonies,
+so rewriting them hurts it more than it hurts a method comparing bulk texture.
+
+`random` is flat everywhere, which is the null control this table needs to be worth
+reading at all. It earned its keep twice. `same_artist` — whether both recordings
+are by the same performer — showed up as a *significant* predictor of a ranking made
+of pure noise, which is impossible. It is true for **2 of 30,648 pairs** on the test
+split, all inside one clique, and a standard error clustered on cliques cannot be
+asked for more than one clique's worth of evidence. Factors that vary across fewer
+than five cliques are now dropped and listed rather than reported.
+
+## The network, and the bug this analysis found
+
+The learned CNN is the only method scored on the held-out split, so it gets its own
+run of the same machinery. Two things came out of it.
+
+**It is the only method whose key effect is null observationally as well as
+interventionally.** All six of its key-shift coefficients have intervals covering
+zero (p between 0.07 and 0.51), where 2D-FTM's are firmly positive. It is also by
+far the most accurate method on that split. Both fit the same explanation: the
+observational key effect is really a proxy for *how badly a method handles a freely
+reinterpreted cover*, and the network handles those best, so the proxy has least to
+bite on.
+
+**Its length coefficient was an artifact, and finding that fixed a real bug.** The
+first run gave the CNN a `duration_ratio` coefficient of **+0.278** — nothing like
+the ~0.01 of every other real method, and second only to the `duration` baseline
+itself. A method whose embedding is supposed to describe harmony should not care
+that much about length.
+
+It didn't. `embed` pads a batch to its longest member and the network mean-pools over
+time, padding included, so an embedding depended on which other tracks shared its
+batch. The same performance embedded alone and beside a longer one had a cosine
+similarity of **0.68** with itself. Zeros are not neutral: batch norm shifts them,
+the ReLU keeps what survives, and it leaks back through the convolutions into the
+last real column.
+
+Masking both pools and grouping batches by padded width fixed it — same performance,
+any batch, now agrees to 3e-05, which is float32 kernel choice rather than structure.
+The coefficient fell from **+0.278 to +0.083**, and `year_gap` fell with it, since
+length had been standing in for era. `test_models.py` now asserts the property.
+
+This is the argument for the whole milestone in one example. The bug was invisible to
+MAP — it *raised* MAP, by smuggling in a length cue that correlates with the right
+answer — and only showed up as a coefficient that made no sense for the architecture.
+
+## What Da-TACOS cannot answer
+
+Two factors are missing from all of that because the dataset does not support them,
+and guessing at them would have been worse than leaving them out.
+
+**Live versus studio.** Only 2 of 40,890 MusicBrainz recording entries carry a
+`live` tag. Performance titles are clean work titles rather than release variants:
+a regex across all 15,000 returns 59 hits and every one is a false positive, along
+the lines of *I Live for Your Love*. There is no signal to recover.
+
+**Genre.** Reachable only as Last.fm tags on about 13% of performances, and those
+attach to a *candidate* MusicBrainz recording rather than to the performance whose
+audio was actually analysed. Too sparse and too indirect to condition on.
+
+Tempo very nearly joined them. Da-TACOS ships madmom's beat tracking, but the local
+archive is a truncated 19 MB fragment of a 3.8 GB file, so the `tempo` column here
+is estimated from the chroma instead: the flux of the chroma is a novelty curve and
+its dominant periodicity is a pulse. That measures harmonic rhythm rather than the
+beat, which is fine for the only use it gets — a *ratio* between two performances of
+one work, who are playing the same chord sequence.
+
+## Does it replicate?
+
+Everything above is the 50-clique subsample, chosen because it holds Q-max and has
+the highest MAPs, so a null there is least likely to be a power failure. The same
+analysis over the **full 15,000 performances — 156,000 pairs in 1,000 cliques** —
+gives the same answers with twenty times the cliques:
+
+| method | key | tempo | length | major↔minor | no singer |
+|---|---:|---:|---:|---:|---:|
+| chroma mean | **+1.183** | +0.007\* | +0.007\* | −0.001 | +0.071\* |
+| chroma mean, best key | +0.093 | +0.025\* | +0.015\* | +0.240\* | +0.131\* |
+| 2D-FTM | +0.069 | +0.078\* | +0.008 | +0.073\* | +0.282\* |
+| 2D-FTM, no DC | +0.106 | +0.119\* | +0.019\* | +0.104\* | +0.083\* |
+| duration | +0.009 | +0.003\* | **+0.404\*** | +0.006 | −0.012\* |
+| random | −0.001 | −0.002 | −0.001 | +0.001 | −0.001 |
+
+The tempo ordering survives exactly — flat for a descriptor with no time axis, worst
+for the fixed-patch method, in between for the one that warps. `duration` lands at
++0.404 against +0.407 on the subsample and +0.405 on the test split, which is a
+reassuring amount of agreement for three different collections. And `random` is null
+on all five factors at the largest sample size available, which is the strongest form
+of the only control that can say this machinery is not manufacturing effects.
+
+One thing 1,000 cliques changes is worth naming: at this size almost anything is
+statistically significant. `chroma mean`'s tempo coefficient is starred at +0.007,
+and it is still nothing — a descriptor with no time axis has no mechanism for a tempo
+effect, and 0.007 in log₁₀(rank) is under 2% of a rank. Read the sizes, not the stars.
+
+## How much to trust the intervals
+
+Standard errors are clustered on the **clique**, not the query. Thirteen
+performances of one work succeed and fail together, every unordered pair appears
+twice (once in each direction), and both directions live in the same clique.
+Treating 7,800 rows as 7,800 independent observations would shrink every interval by
+roughly the square root of thirteen and turn ordinary between-work variation into
+significance.
+
+Three caveats worth stating rather than burying:
+
+- The subsample has **50 cliques**, which is 50 independent pieces of evidence
+  however many pairs they contain. That is on the low side for a cluster-robust
+  sandwich.
+- This is inference about the *query sample* given a fixed collection. The 2,000
+  distractors never move. It says how much a number would wobble if the works had
+  been drawn differently, not how it would move on another dataset.
+- Q-max ties 35% of adjacent pairs, and the collection is clique-contiguous, so its
+  tie-breaking is correlated with the right answer.
 
 # Dependencies Needed
 - Numpy, scipy for all the array math, fast fourier transform, signal processing
@@ -197,8 +443,12 @@ src/csr/
              ftm2d.py    the 2D Fourier magnitude descriptor
   similarity/vector.py   chunked cosine distance
              qmax.py     recurrence plots and the alignment DP
-  eval/      metrics.py  MAP / MR1 / P@10   (the fixed contract)
+  eval/      metrics.py  MAP / MR1 / P@10, and the per-pair layer under them
              batch.py    the same thing, a block of queries at a time
+  analysis/  tempo.py    pulse from chroma flux, since madmom's is unreadable
+             factors.py  what changed between a query and one of its covers
+             stats.py    bootstrap over cliques, not queries
+             regress.py  within-query fixed effects, clustered errors
   methods.py the registry: every method returns a distance matrix
   models.py  the learned embedding
   run.py     config -> method -> results/<name>.json

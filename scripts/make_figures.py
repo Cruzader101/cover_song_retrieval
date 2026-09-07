@@ -55,6 +55,8 @@ METHODS = {
     "ftm2d_nodc": ("2D-FTM, no DC", True),
     "qmax": ("Qmax", True),
     "learned": ("learned CNN", True),
+    "chroma_mean": ("chroma mean", True),
+    "chroma_mean_oti": ("chroma mean, best key", True),
 }
 SUFFIXES = ("_full", "_sub50", "_test")
 
@@ -480,10 +482,166 @@ def fig_rank_curve(frame, chroma, theme) -> None:
     viz.save(fig, "rank-curve", theme)
 
 
+# --------------------------------------------------------------------------
+# figure 5 -- what a key change costs, asked two ways
+# --------------------------------------------------------------------------
+
+ANALYSIS = RESULTS / "analysis"
+
+#: Drawn in this order, and only these. The two controls bracket the real methods:
+#: same descriptor, one key invariant and one not.
+ANALYSIS_METHODS = ("chroma_mean", "ftm2d_nodc", "qmax", "learned", "random")
+
+
+def load_analysis(collection: str) -> dict | None:
+    path = ANALYSIS / f"{collection}.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def analysis_rows(analysis: dict):
+    """(run name, entry, display label) in ANALYSIS_METHODS order.
+
+    Matched on the run name, not on `entry["method"]`. Two runs can share a method
+    and differ only in a parameter -- ftm2d_nodc is the ftm2d method with one
+    coefficient dropped -- so the method field cannot tell them apart.
+    """
+    rows = []
+    for wanted in ANALYSIS_METHODS:
+        for name, entry in analysis["methods"].items():
+            if method_key({"run_name": name}) == wanted:
+                rows.append((name, entry, METHODS[wanted][0]))
+                break
+    return rows
+
+
+def fig_key_invariance(analysis, theme) -> None:
+    """The observational answer beside the interventional one.
+
+    Left: what a key change looks like it costs, from the covers that happen to be
+    transposed. Right: what it actually costs, from re-keying every performance at
+    random. A method whose invariance is real sits at zero on the right however far
+    from zero it sits on the left, and the gap between the panels is the finding.
+    """
+    rows = analysis_rows(analysis)
+    fig, (left, right) = plt.subplots(1, 2, figsize=(8.6, 3.4), constrained_layout=True)
+
+    shifts = np.arange(1, 7)
+    for index, (name, entry, label) in enumerate(rows):
+        coefs = entry["coefficients"]
+        if "key_shift_1" not in coefs:
+            continue
+        uses_audio = METHODS[method_key({"run_name": name})][1]
+        color = theme.series[index % 3] if uses_audio else theme.baseline
+        values = [coefs[f"key_shift_{s}"]["coef"] for s in shifts]
+        low = [coefs[f"key_shift_{s}"]["ci_low"] for s in shifts]
+        high = [coefs[f"key_shift_{s}"]["ci_high"] for s in shifts]
+
+        left.plot(shifts, values, color=color, lw=1.6, marker="o", ms=3.5, label=label)
+        left.fill_between(shifts, low, high, color=color, alpha=0.13, lw=0)
+
+    left.axhline(0, color=theme.muted, lw=1, ls=(0, (3, 3)), zorder=0)
+    # The sensitive control sits an order of magnitude above the real methods, and
+    # on a linear axis it flattens them into the zero line. symlog keeps its size
+    # visible while leaving the small effects readable, and unlike a log axis it
+    # still renders the random floor, which is near zero and sometimes negative.
+    left.set_yscale("symlog", linthresh=0.05, linscale=0.4)
+    left.set_yticks([0.0, 0.05, 0.1, 0.2, 0.5, 1.0])
+    left.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}"))
+    left.set_xlabel("semitones between the two performances")
+    left.set_ylabel("cost in log$_{10}$(rank)")
+    left.set_title("What transposed covers look like they cost",
+                   color=theme.text, pad=8)
+    left.legend(frameon=False, fontsize=8, loc="lower right")
+    left.minorticks_off()  # symlog scatters unlabelled decade ticks around zero
+    left.grid(axis="y", lw=0.6, alpha=0.7)
+    left.set_axisbelow(True)
+    _strip(left)
+
+    drawn = [(e, label) for _, e, label in rows if "map_rekeyed" in e]
+    y = np.arange(len(drawn))
+    drops = [100 * (1 - e["map_rekeyed"] / e["map"]) for e, _ in drawn]
+    colors = [
+        theme.series[1] if d > 1.0 else theme.baseline for d in drops
+    ]
+    right.barh(y, drops, color=colors, height=0.6)
+    right.set_yticks(y, [label for _, label in drawn])
+    for yi, drop in zip(y, drops):
+        right.text(drop + 1.4, yi, f"{drop:.1f}%", va="center", fontsize=8,
+                   color=theme.secondary)
+    right.set_xlim(-1, max(max(drops), 10) * 1.25)
+    right.set_xlabel("MAP lost when every performance is re-keyed")
+    right.set_title("What it actually costs", color=theme.text, pad=8)
+    right.grid(axis="x", lw=0.6, alpha=0.7)
+    right.set_axisbelow(True)
+    _strip(right)
+
+    fig.suptitle(
+        "Left: covers that happen to be in another key rank worse for every method "
+        "that reads pitch.\nRight: transposing every performance changes nothing "
+        "for the same methods. The key change is a marker, not a cause.",
+        fontsize=9, color=theme.secondary, y=1.16,
+    )
+    viz.save(fig, "key-invariance", theme)
+
+
+# --------------------------------------------------------------------------
+# figure 6 -- everything else that predicts a bad rank
+# --------------------------------------------------------------------------
+
+FACTOR_LABELS = {
+    "pulse_ratio_sd": "tempo change",
+    "duration_ratio_sd": "length change",
+    "year_gap_sd": "years apart",
+    "mode_change": "major <-> minor",
+    "instrumental_mismatch": "one has no singer",
+}
+
+
+def fig_effect_sizes(analysis, theme) -> None:
+    """Every non-key factor, per method, with clustered intervals.
+
+    Continuous factors are per standard deviation and binary ones are the whole
+    switch, so the two are labelled apart rather than ranked against each other.
+    Positive is worse: the cover lands further down.
+    """
+    rows = [r for r in analysis_rows(analysis) if r[1]["method"] != "random"]
+    factors = [f for f in FACTOR_LABELS if all(f in e["coefficients"] for _, e, _ in rows)]
+
+    fig, ax = plt.subplots(figsize=(7.2, 0.23 * len(factors) * len(rows) + 1.3),
+                           constrained_layout=True)
+
+    spacing = len(rows) + 1
+    ticks, labels = [], []
+    for f_index, factor in enumerate(factors):
+        base = f_index * spacing
+        ticks.append(base + (len(rows) - 1) / 2)
+        labels.append(FACTOR_LABELS[factor])
+        for m_index, (_, entry, label) in enumerate(rows):
+            c = entry["coefficients"][factor]
+            y = base + m_index
+            color = theme.series[m_index % 3]
+            ax.plot([c["ci_low"], c["ci_high"]], [y, y], color=color, lw=1.4,
+                    solid_capstyle="butt")
+            ax.plot(c["coef"], y, "o", color=color, ms=4.5,
+                    label=label if f_index == 0 else None)
+
+    ax.axvline(0, color=theme.muted, lw=1, ls=(0, (3, 3)), zorder=0)
+    ax.set_yticks(ticks, labels)
+    ax.invert_yaxis()
+    ax.set_xlabel("cost in log$_{10}$(rank).  positive means the cover ranks worse")
+    ax.legend(frameon=False, fontsize=8, ncol=len(rows), loc="lower center",
+              bbox_to_anchor=(0.5, 1.0))
+    ax.grid(axis="x", lw=0.6, alpha=0.7)
+    ax.set_axisbelow(True)
+    _strip(ax)
+    viz.save(fig, "effect-sizes", theme)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("which", nargs="?", default="all",
-                    choices=["all", "features", "results"])
+                    choices=["all", "features", "results", "analysis"])
+    ap.add_argument("--analysis-collection", default="subsample50")
     args = ap.parse_args()
 
     frame = manifest("hpcp")
@@ -524,6 +682,17 @@ def main() -> int:
             fig_rank_curve(frame, chroma, theme)
             if chosen is not None:
                 fig_crp(chosen, chroma, theme)
+
+    if args.which in ("all", "analysis"):
+        analysis = load_analysis(args.analysis_collection)
+        if analysis is None:
+            print(f"  no results/analysis/{args.analysis_collection}.json; "
+                  "run scripts/analyze.py first")
+        else:
+            for theme in viz.THEMES:
+                viz.apply(theme)
+                fig_key_invariance(analysis, theme)
+                fig_effect_sizes(analysis, theme)
 
     for path in sorted(viz.FIGURES.glob("*.png")):
         print(f"  {path}  ({path.stat().st_size // 1024} KB)")

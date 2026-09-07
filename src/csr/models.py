@@ -70,12 +70,47 @@ class ChromaCNN(nn.Module):
             ]
         self.features = nn.Sequential(*blocks)
         self.project = nn.Linear(channels[-1] * 2, dim)
+        #: How much the time axis shrinks, one halving per block. Needed to turn a
+        #: length in input frames into a length in feature columns.
+        self.time_stride = 2 ** (len(channels) - 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor | None = None):
+        """`lengths` is each item's real width in frames, before any padding.
+
+        Batching performances of different lengths means padding the short ones,
+        and pooling over that padding makes an embedding depend on which other
+        tracks happened to share its batch. Both pools have to be masked, not just
+        the mean: the padded region is zeros, but batch norm shifts them and the
+        ReLU keeps what survives, so a padded column can out-rank a real one.
+
+        The boundary is computed from `lengths` alone, never from the padded width.
+        This also needs the caller to pad to a multiple of `time_stride`: each of
+        the five poolings floors, so an unaligned width discards a boundary element
+        at a different place and the final column of a performance comes out
+        different depending on how wide its batch was. `embed` does that padding.
+
+        Training passes None because its crops are all one length, so the mask
+        would be all ones and this is exactly the pooling the checkpoint was fit
+        with.
+        """
         h = self.features(x)
         h = h.amax(dim=2)  # over pitch: equivariance becomes invariance
-        pooled = torch.cat([h.amax(dim=2), h.mean(dim=2)], dim=1)  # over time
-        return F.normalize(self.project(pooled), dim=1)
+
+        if lengths is None:
+            return F.normalize(
+                self.project(torch.cat([h.amax(dim=2), h.mean(dim=2)], dim=1)), dim=1
+            )
+
+        valid = torch.div(
+            lengths + self.time_stride - 1, self.time_stride, rounding_mode="floor"
+        ).clamp(1, h.shape[2])
+        keep = (
+            torch.arange(h.shape[2], device=h.device)[None, :] < valid[:, None]
+        )[:, None, :]
+
+        peak = h.masked_fill(~keep, float("-inf")).amax(dim=2)
+        average = (h * keep).sum(dim=2) / valid[:, None]
+        return F.normalize(self.project(torch.cat([peak, average], dim=1)), dim=1)
 
 
 class CosineHead(nn.Module):
@@ -130,20 +165,47 @@ class Crops(Dataset):
 
 @torch.no_grad()
 def embed(model: ChromaCNN, perf_ids, chroma, device="cuda", batch=16) -> np.ndarray:
-    """Embed full-length performances, no cropping. -> (n, dim) float32."""
+    """Embed full-length performances, no cropping. -> (n, dim) float32.
+
+    Batches are grouped so that every member pads to the same width, and that width
+    depends only on the member's own length.
+
+    That grouping is load-bearing rather than an optimisation. Nothing in this
+    network mixes items -- convolution, eval-mode batch norm and pooling are all
+    per-item -- so the *only* way a neighbour can change an embedding is by forcing
+    a wider pad. And a wider pad does change it: zeros are not neutral once batch
+    norm shifts them, the ReLU keeps what survives, and the result leaks back
+    through the convolutions into the last real column. Before this, the same
+    performance embedded two different ways depending on who it was batched with,
+    at a cosine of 0.68, and the pair analysis saw it as the network being unusually
+    sensitive to a difference in length.
+    """
     model.eval()
-    out = []
-    for start in range(0, len(perf_ids), batch):
-        group = [
-            np.asarray(chroma[p], dtype=np.float32)
-            for p in perf_ids[start : start + batch]
-        ]
-        width = max(len(c) for c in group)
-        padded = np.zeros((len(group), 1, 12, width), dtype=np.float32)
-        for i, c in enumerate(group):
-            padded[i, 0, :, : len(c)] = c.T
-        out.append(model(torch.from_numpy(padded).to(device)).cpu().numpy())
-    return np.concatenate(out)
+    stride = model.time_stride
+
+    buckets: dict[int, list[int]] = {}
+    for index, pid in enumerate(perf_ids):
+        buckets.setdefault(-(-len(chroma[pid]) // stride) * stride, []).append(index)
+
+    vectors, order = [], []
+    for width, members in buckets.items():
+        for start in range(0, len(members), batch):
+            chunk = members[start : start + batch]
+            group = [np.asarray(chroma[perf_ids[i]], dtype=np.float32) for i in chunk]
+            padded = np.zeros((len(group), 1, 12, width), dtype=np.float32)
+            for i, c in enumerate(group):
+                padded[i, 0, :, : len(c)] = c.T
+            lengths = torch.tensor(
+                [len(c) for c in group], dtype=torch.long, device=device
+            )
+            vectors.append(
+                model(torch.from_numpy(padded).to(device), lengths).cpu().numpy()
+            )
+            order.extend(chunk)
+
+    out = np.empty_like(np.concatenate(vectors))
+    out[np.asarray(order)] = np.concatenate(vectors)
+    return out
 
 
 def train(

@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from csr.features.chroma import downsample_to_rate, normalize_frames
+from csr.features.chroma import downsample_to_rate, global_chroma, normalize_frames
 from csr.features.ftm2d import ftm2d_matrix
 from csr.similarity.qmax import prepare, qmax_distance
 from csr.similarity.vector import cosine_distance_matrix
@@ -81,6 +81,56 @@ def duration_method(collection, load, params, rng) -> np.ndarray:
     d = np.abs(frames[:, None] - frames[None, :])
     np.fill_diagonal(d, 0.0)
     return d
+
+
+# --- The matched pair -------------------------------------------------------
+# These two are the same descriptor -- the average pitch-class profile of a whole
+# performance -- compared two ways. `chroma_mean` reads the profiles where they lie,
+# so transposing a cover moves it away from its query. `chroma_mean_oti` rotates one
+# profile against the other twelve ways and keeps the best, which is exactly the
+# invariance ftm2d gets from an FFT magnitude and qmax gets from the OTI.
+#
+# They exist to make a null result mean something. Every real method here claims key
+# invariance, so "key shift does not predict rank" is the expected finding -- and it
+# is indistinguishable from an analysis too weak to detect anything at all. Running
+# a pair that differs in one property and nothing else turns that into a controlled
+# comparison: the sensitive one must show the effect for the null to be evidence.
+
+
+@register("chroma_mean")
+def chroma_mean_method(collection, load, params, rng) -> np.ndarray:
+    """Cosine distance between average pitch-class profiles. Not key invariant."""
+    profiles = np.stack(
+        [
+            global_chroma(load(pid))
+            for pid in tqdm(collection["perf_id"], desc="chroma_mean", leave=False)
+        ]
+    )
+    return cosine_distance_matrix(profiles)
+
+
+@register("chroma_mean_oti")
+def chroma_mean_oti_method(collection, load, params, rng) -> np.ndarray:
+    """The same profiles, compared at their best of twelve rotations.
+
+    The best rotation per pair is the maximum cosine similarity, so the distance is
+    the minimum over the twelve rolls. Symmetric: rolling a by s and rolling b by
+    -s give the same inner product, so the twelve scores are the same either way.
+    """
+    profiles = np.stack(
+        [
+            global_chroma(load(pid))
+            for pid in tqdm(collection["perf_id"], desc="chroma_mean_oti", leave=False)
+        ]
+    )
+    # Reduced in place. Holding all twelve rotations at once would be 10 GB on the
+    # full collection, where one distance matrix is already 900 MB.
+    best = cosine_distance_matrix(profiles)
+    for shift in range(1, 12):
+        rolled = cosine_distance_matrix(profiles, np.roll(profiles, shift, axis=1))
+        np.minimum(best, rolled, out=best)
+    np.fill_diagonal(best, 0.0)
+    return best
 
 
 @register("ftm2d")

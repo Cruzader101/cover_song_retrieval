@@ -17,7 +17,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+# statsmodels is a test-only reference implementation: the within-group regression
+# in csr.analysis.regress is hand-rolled, and one test asserts it agrees with an
+# established package. Nothing in src/ imports it.
+dev = ["pytest>=8.0", "statsmodels>=0.14"]
 # torch is installed from the CUDA 12.8 index for sm_120, not from PyPI:
 #   pip install torch --index-url https://download.pytorch.org/whl/cu128
 deep = ["torch>=2.7"]
@@ -31,4 +34,5 @@ markers = [
     "slow: takes more than a few seconds (deselect with -m 'not slow')",
     "needs_data: requires the real Da-TACOS download under data/raw",
     "needs_torch: requires torch to be installed",
+    "needs_statsmodels: cross-checks a hand-rolled estimator against statsmodels",
 ]
