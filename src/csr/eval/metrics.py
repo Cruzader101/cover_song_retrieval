@@ -18,7 +18,14 @@ from typing import Sequence
 
 import numpy as np
 
-__all__ = ["RetrievalResults", "rankings_from_distances", "evaluate"]
+__all__ = [
+    "RetrievalResults",
+    "PerQuery",
+    "rankings_from_distances",
+    "evaluate",
+    "per_query",
+    "pair_ranks",
+]
 
 
 @dataclass(frozen=True)
@@ -40,6 +47,39 @@ class RetrievalResults:
             f"MR1   {self.mean_rank_first_correct:.2f}\n"
             f"P@10  {self.precision_at_10:.4f}\n"
             f"(n_queries={self.n_queries}, ties={self.tie_fraction:.3%})"
+        )
+
+
+@dataclass(frozen=True)
+class PerQuery:
+    """Everything :func:`evaluate` averages away, kept one row per query.
+
+    The aggregate metrics are all means over queries, so this is the layer
+    underneath them: ``summary()`` reduces it to exactly what ``evaluate`` returns,
+    and analysis that asks *which* covers a method missed reads ``ranking`` and
+    ``relevant`` instead of re-deriving them.
+
+    Shapes: the per-query scores are ``(n_queries,)``; ``ranking`` and ``relevant``
+    are ``(n_queries, n_items - 1)``. ``ranking`` holds collection indices, so a
+    chunk of queries means the same thing as the whole set.
+    """
+
+    average_precision: np.ndarray
+    rank_first_correct: np.ndarray
+    precision_at_k: np.ndarray
+    n_relevant: np.ndarray
+    ranking: np.ndarray
+    relevant: np.ndarray
+    query_index: np.ndarray
+    tie_fraction: float
+
+    def summary(self) -> RetrievalResults:
+        return RetrievalResults(
+            mean_average_precision=float(self.average_precision.mean()),
+            mean_rank_first_correct=float(self.rank_first_correct.mean()),
+            precision_at_10=float(self.precision_at_k.mean()),
+            n_queries=int(len(self.average_precision)),
+            tie_fraction=self.tie_fraction,
         )
 
 
@@ -103,13 +143,13 @@ def _adjacent_tie_fraction(distances: np.ndarray, ranking: np.ndarray) -> float:
     return float((valid & (left == right)).sum() / valid.sum())
 
 
-def evaluate(
+def per_query(
     distances: np.ndarray,
     cliques: Sequence,
     query_index: Sequence[int] | np.ndarray | None = None,
     k: int = 10,
-) -> RetrievalResults:
-    """Score a distance matrix against ground-truth clique labels.
+) -> PerQuery:
+    """Score a distance matrix against ground-truth clique labels, per query.
 
     Args:
         distances: ``(n_queries, n_items)``, smaller = more similar.
@@ -140,7 +180,13 @@ def evaluate(
 
     ranking = rankings_from_distances(distances, query_index)
     query_labels = labels[query_index]
-    relevant = labels[ranking] == query_labels[:, None]  # (n_queries, n_items-1)
+
+    # Compare integer codes rather than the labels themselves. Clique ids are short
+    # strings, so `labels[ranking]` would gather a (n_queries, n_items-1) array of
+    # 32-byte items -- about a gigabyte on one full-benchmark chunk, the largest
+    # allocation in the pipeline -- to answer a question about equality.
+    codes = np.unique(labels, return_inverse=True)[1].astype(np.int32, copy=False)
+    relevant = codes[ranking] == codes[query_index][:, None]
 
     n_relevant = relevant.sum(axis=1)
     empty = np.flatnonzero(n_relevant == 0)
@@ -165,12 +211,44 @@ def evaluate(
     kk = min(k, relevant.shape[1])
     p_at_k = relevant[:, :kk].sum(axis=1) / kk
 
-    tie_fraction = _adjacent_tie_fraction(distances, ranking)
-
-    return RetrievalResults(
-        mean_average_precision=float(ap.mean()),
-        mean_rank_first_correct=float(r1.mean()),
-        precision_at_10=float(p_at_k.mean()),
-        n_queries=int(n_queries),
-        tie_fraction=tie_fraction,
+    return PerQuery(
+        average_precision=ap,
+        rank_first_correct=r1,
+        precision_at_k=p_at_k,
+        n_relevant=n_relevant,
+        ranking=ranking,
+        relevant=relevant,
+        query_index=query_index,
+        tie_fraction=_adjacent_tie_fraction(distances, ranking),
     )
+
+
+def evaluate(
+    distances: np.ndarray,
+    cliques: Sequence,
+    query_index: Sequence[int] | np.ndarray | None = None,
+    k: int = 10,
+) -> RetrievalResults:
+    """Aggregate scores for a distance matrix. See :func:`per_query` for the args.
+
+    Reducing the per-query layer rather than computing the means separately is what
+    stops a reported MAP and a per-pair analysis of the same run from disagreeing.
+    """
+    return per_query(distances, cliques, query_index, k).summary()
+
+
+def pair_ranks(detail: PerQuery) -> np.ndarray:
+    """Where every true cover landed. -> ``(n_pairs, 3)`` int32.
+
+    One row per (query, relevant item) pair: the query's collection index, the
+    relevant item's collection index, and the 1-indexed rank that item reached in
+    that query's ranking. MR1 is the first row of each query's block; this keeps
+    the other eleven, which is what an analysis of *which* covers were missed needs.
+
+    Both ids are collection indices, so pair tables from separate query chunks
+    concatenate without renumbering.
+    """
+    rows, cols = np.nonzero(detail.relevant)
+    return np.column_stack(
+        [detail.query_index[rows], detail.ranking[rows, cols], cols + 1]
+    ).astype(np.int32, copy=False)
