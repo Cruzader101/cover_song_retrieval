@@ -23,6 +23,9 @@ from csr.methods import build
 
 MANIFEST_DIR = Path("data/interim")
 RESULTS_DIR = Path("results")
+#: Where `save_distances` runs put their matrix. Not results/: a distance matrix
+#: is an intermediate, and results/ holds the metrics a run is judged on.
+DISTANCE_DIR = Path("data/interim/distances")
 
 
 def git_state() -> dict:
@@ -149,4 +152,12 @@ def run(
     (out_dir / f"{config['name']}.json").write_text(
         json.dumps(payload, indent=2), encoding="utf-8"
     )
+
+    # Opt-in, because at 15000 items a matrix is 900 MB. Worth it for a method
+    # that costs hours: the figures then read what the eval scored, instead of
+    # spending those hours again to recompute the same numbers.
+    if config.get("save_distances"):
+        DISTANCE_DIR.mkdir(parents=True, exist_ok=True)
+        np.save(DISTANCE_DIR / f"{config['name']}.npy", distances)
+
     return payload

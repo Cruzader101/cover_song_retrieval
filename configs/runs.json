@@ -3,7 +3,8 @@
     "Every run in the project, in one versioned file. Runs are grouped by the",
     "collection they are scored on. MAP is only comparable *within* a group: a",
     "smaller collection has fewer wrong answers available and scores higher for",
-    "free, so the report never puts two groups in one table."
+    "free, so the report never puts two groups in one table.",
+    "ftm2d_nodc_* zero the DC coefficient of the descriptor. It is ~97% of the energy and squeezes every distance into a narrow band; the pair is kept so the effect of removing it is a measured number rather than a claim."
   ],
   "full": [
     {
@@ -35,6 +36,22 @@
         "patch_hop": 60,
         "n_time_coeffs": 32,
         "compress": "sqrt"
+      }
+    },
+    {
+      "name": "ftm2d_nodc_full",
+      "method": "ftm2d",
+      "seed": 0,
+      "collection": {
+        "kind": "full"
+      },
+      "params": {
+        "target_hz": 5.0,
+        "patch_frames": 180,
+        "patch_hop": 60,
+        "n_time_coeffs": 32,
+        "compress": "sqrt",
+        "drop_dc": true
       }
     }
   ],
@@ -94,6 +111,25 @@
         "gap_extend": 0.5,
         "symmetrize": true,
         "n_jobs": 12
+      },
+      "save_distances": true
+    },
+    {
+      "name": "ftm2d_nodc_sub50",
+      "method": "ftm2d",
+      "seed": 0,
+      "collection": {
+        "kind": "subsample",
+        "n_cliques": 50,
+        "seed": 0
+      },
+      "params": {
+        "target_hz": 5.0,
+        "patch_frames": 180,
+        "patch_hop": 60,
+        "n_time_coeffs": 32,
+        "compress": "sqrt",
+        "drop_dc": true
       }
     }
   ],
@@ -146,6 +182,24 @@
       },
       "params": {
         "checkpoint": "results/cnn.pt"
+      }
+    },
+    {
+      "name": "ftm2d_nodc_test",
+      "method": "ftm2d",
+      "seed": 0,
+      "collection": {
+        "kind": "split",
+        "split": "test",
+        "seed": 0
+      },
+      "params": {
+        "target_hz": 5.0,
+        "patch_frames": 180,
+        "patch_hop": 60,
+        "n_time_coeffs": 32,
+        "compress": "sqrt",
+        "drop_dc": true
       }
     }
   ]

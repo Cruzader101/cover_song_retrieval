@@ -24,9 +24,9 @@ from csr.eval.metrics import RetrievalResults  # noqa: E402
 from csr.run import RESULTS_DIR, manifest, run  # noqa: E402
 
 CACHE = Path("data/interim/chroma_native")
-FAST = ["random_full", "duration_full", "ftm2d_full",
-        "random_sub50", "duration_sub50", "ftm2d_sub50",
-        "random_test", "duration_test", "ftm2d_test"]
+FAST = ["random_full", "duration_full", "ftm2d_full", "ftm2d_nodc_full",
+        "random_sub50", "duration_sub50", "ftm2d_sub50", "ftm2d_nodc_sub50",
+        "random_test", "duration_test", "ftm2d_test", "ftm2d_nodc_test"]
 SLOW = ["qmax_sub50"]
 LEARNED = ["learned_test"]
 
@@ -75,19 +75,32 @@ def main() -> int:
     if args.train:
         subprocess.run([sys.executable, "scripts/train.py"], check=True)
 
-    names = list(FAST) + (SLOW if args.slow else []) + (LEARNED if args.learned else [])
     configs = load_runs()
-    for name in names:
+    for name in FAST:
         if name not in configs:
             print(f"  skipping {name}: not in configs/runs.json")
             continue
         started = time.time()
         payload = run(configs[name], frame=frame, load_factory=loader)
         metrics = payload["metrics"]
-        print(f"  {name:<16} MAP {metrics['mean_average_precision']:.4f}  "
+        print(f"  {name:<18} MAP {metrics['mean_average_precision']:.4f}  "
               f"MR1 {metrics['mean_rank_first_correct']:8.1f}  "
               f"P@10 {metrics['precision_at_10']:.4f}  "
               f"({time.time() - started:.0f}s)")
+
+    # Qmax and the CNN each get a fresh interpreter. Running them here would put
+    # them on top of a process that has already paged in the whole chroma cache
+    # and built a 15000 x 15000 distance matrix -- and Qmax then forks twelve
+    # workers off that. That combination got this script OOM-killed partway
+    # through a two-hour run; a subprocess bounds peak memory to one run at a
+    # time. They load from HDF5 rather than the cache, which for these two is
+    # also the faster path, since neither reads enough of it to earn the paging.
+    for name in (SLOW if args.slow else []) + (LEARNED if args.learned else []):
+        if name not in configs:
+            print(f"  skipping {name}: not in configs/runs.json")
+            continue
+        print(f"  {name} (separate process)")
+        subprocess.run([sys.executable, "scripts/run_eval.py", name], check=True)
 
     text = render(load(RESULTS_DIR))
     Path(RESULTS_DIR / "summary.md").write_text(text, encoding="utf-8")

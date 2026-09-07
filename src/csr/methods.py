@@ -98,6 +98,7 @@ def ftm2d_method(collection, load, params, rng) -> np.ndarray:
         patch_hop=params.get("patch_hop", 60),
         n_time_coeffs=params.get("n_time_coeffs", 32),
         compress=params.get("compress", "sqrt"),
+        drop_dc=params.get("drop_dc", False),
     )
     return cosine_distance_matrix(descriptors)
 

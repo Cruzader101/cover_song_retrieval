@@ -117,3 +117,27 @@ def test_ftm2d_pads_songs_shorter_than_one_patch():
     d = ftm2d(rng.random((20, 12)).astype(np.float32), patch_frames=180)
     assert d.shape == (32 * 7,)
     assert np.isfinite(d).all()
+
+
+def test_ftm2d_drop_dc_zeroes_only_the_dc_bin():
+    """The flag removes one coefficient and renormalises, nothing else."""
+    rng = np.random.default_rng(0)
+    x = rng.random((600, 12)).astype(np.float32)
+
+    kept, dropped = ftm2d(x), ftm2d(x, drop_dc=True)
+    assert kept[0] > 0.9  # the bin really does dominate
+    assert dropped[0] == 0.0
+    assert np.isclose(np.linalg.norm(dropped), 1.0, atol=1e-6)
+
+    # The surviving bins keep their relative sizes; only the scale changes.
+    assert np.allclose(dropped[1:] / dropped[1:].sum(), kept[1:] / kept[1:].sum(),
+                       atol=1e-6)
+
+
+@pytest.mark.parametrize("semitones", [1, 5, 11])
+def test_ftm2d_drop_dc_is_still_transposition_invariant(semitones):
+    """Dropping a bin must not cost the property the descriptor exists for."""
+    rng = np.random.default_rng(0)
+    x = rng.random((600, 12)).astype(np.float32)
+    assert np.allclose(ftm2d(transpose(x, semitones), drop_dc=True),
+                       ftm2d(x, drop_dc=True), atol=1e-6)

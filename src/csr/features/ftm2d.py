@@ -43,6 +43,7 @@ def ftm2d(
     n_time_coeffs: int = 32,
     compress: str = "sqrt",
     aggregate: str = "median",
+    drop_dc: bool = False,
 ) -> np.ndarray:
     """Describe one performance as a fixed-length, key-invariant vector.
 
@@ -53,6 +54,11 @@ def ftm2d(
         n_time_coeffs: how many of the lowest time frequencies to keep.
         compress: 'sqrt', 'log' or 'none' amplitude compression before the FFT.
         aggregate: 'median' or 'mean' over patches.
+        drop_dc: zero the [0, 0] coefficient before normalising. That bin is the
+            mean of the patch, and it carries about 97% of the descriptor's
+            energy, which pins every pair of songs to a small angle and leaves
+            the discriminative bins to fight over what is left. See the note
+            below.
 
     Returns:
         (n_time_coeffs * 7,) float32 with unit L2 norm.
@@ -60,6 +66,14 @@ def ftm2d(
     Only pitch bins 0..6 are kept: for real input the 2-D FFT magnitude satisfies
     |F[u, v]| == |F[-u, -v]|, so bins 7..11 are mirror images of bins 1..5 and
     carry nothing new.
+
+    On `drop_dc`: the DC bin is invariant in the same way as everything else, so
+    keeping it costs nothing in principle. In practice it dominates: with it in,
+    every cosine distance on the benchmark subsample falls in [0, 0.05], and
+    dropping it raises MAP from 0.178 to 0.226 there and from 0.059 to 0.090 on
+    the held-out split. It is off by default so that the descriptor stays the one
+    Bertin-Mahieux & Ellis describe, and the gain is reported as a measured
+    variant rather than folded silently into the baseline.
 
     Invariance is exact for transposition, and exact for time shift only *within*
     a patch -- shifting a whole performance moves frames across patch boundaries,
@@ -84,6 +98,9 @@ def ftm2d(
 
     reduce = {"median": np.median, "mean": np.mean}[aggregate]
     descriptor = reduce(kept, axis=0).ravel().astype(np.float32)
+
+    if drop_dc:
+        descriptor[0] = 0.0
 
     norm = np.linalg.norm(descriptor)
     return descriptor / norm if norm > 1e-9 else descriptor
