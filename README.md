@@ -3,6 +3,8 @@ This project tries to rank performances of different songs so that an actual cov
 
 This is somewhat hard because a cover of a song can differ in key, tempo, and instruments. 
 
+I"m still cleaning some stuff in another branch with some regression stuff to analyze the effects of changes to songs.
+
 # How do you rank the cover of a song?
 What doesn't change in between covers is the harmonic progression.
 
